@@ -1,22 +1,102 @@
 # google-workspace-mcp
 
-MCP-сервер (stdio) для Google Docs и Slides через сервисный аккаунт.
-Инструменты: `docs_read`, `docs_append`, `docs_replace_text`, `docs_batch_update`,
-`slides_get`, `slides_add_slide`, `slides_replace_text`, `slides_batch_update`.
+MCP-сервер (stdio) для Google Docs и Slides через **сервисный аккаунт** — без
+OAuth-танцев и без браузерного логина. Сервер видит только те файлы, которые
+явно расшарены на этот аккаунт, поэтому зона доступа Claude всегда обозрима:
+обычно это одна рабочая папка в Drive.
 
-Доступ — только к файлам, расшаренным на сервисный аккаунт (или лежащим в расшаренной на него папке Drive).
+## Инструменты
 
-## Запуск
+| Tool | Что делает |
+|---|---|
+| `docs_read` | Прочитать документ как plain text |
+| `docs_append` | Дописать текст в конец документа |
+| `docs_replace_text` | Найти и заменить все вхождения |
+| `docs_batch_update` | Сырые запросы Docs API batchUpdate — форматирование, картинки, таблицы |
+| `slides_get` | Структура презентации: слайды, id элементов, их текст |
+| `slides_add_slide` | Добавить слайд (layout по умолчанию `TITLE_AND_BODY`) |
+| `slides_replace_text` | Найти и заменить по всем слайдам |
+| `slides_batch_update` | Сырые запросы Slides API batchUpdate — фигуры, картинки, форматирование |
+
+`*_batch_update` дают полную мощь API: если чего-то нет в готовых ручках, почти
+наверняка это делается через них.
+
+## Быстрый старт
 
 ```bash
+git clone https://github.com/vsmelov/google-workspace-mcp.git
+cd google-workspace-mcp
 npm install
-GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json node index.js
+node setup.js
 ```
 
-## Регистрация в Claude Code
+`setup.js` проверит Node, зависимости и ключ, покажет email сервисного аккаунта
+и напечатает готовую команду подключения. Ключ он только читает локально —
+содержимое никуда не отправляется и не печатается.
+
+Перед этим нужно один раз завести сервисный аккаунт — см. следующий раздел.
+
+## Google Cloud: как получить ключ
+
+Делается один раз, ~5 минут.
+
+1. **Проект.** [console.cloud.google.com](https://console.cloud.google.com/) →
+   создать проект (или взять существующий).
+2. **Включить API.** APIs & Services → Library → включить три штуки:
+   **Google Docs API**, **Google Slides API**, **Google Drive API**.
+   Drive нужен даже если работаешь только с документами: через него сервер
+   находит файлы и проверяет доступ.
+3. **Сервисный аккаунт.** IAM & Admin → Service Accounts → Create service
+   account. Роли на уровне проекта выдавать **не нужно** — доступ к файлам даётся
+   не ролями, а шарингом в Drive (следующий шаг).
+4. **Ключ.** Открыть созданный аккаунт → Keys → Add key → Create new key → JSON.
+   Файл скачается один раз, второй раз его не выдадут.
+5. **Положить ключ вне репозитория**, например `C:\keys\sa.json` или `~/.config/gcp/sa.json`.
+   В репу его класть не нужно и не стоит.
+
+## Дать серверу доступ к файлам
+
+Ключ сам по себе не даёт доступа ни к чему. Доступ выдаётся так же, как коллеге:
+
+1. Создай в своём Drive папку, например `Claude`.
+2. Расшарь её на email сервисного аккаунта — он выглядит как
+   `имя@проект.iam.gserviceaccount.com` и лежит в JSON-ключе в поле
+   `client_email` (его же печатает `setup.js`).
+3. Права: **Editor**, если Claude должен править документы; **Viewer**, если
+   только читать.
+
+Всё, что лежит в этой папке, сервер видит. Всё остальное в твоём Drive — нет.
+Это и есть главная причина использовать сервисный аккаунт вместо OAuth: зона
+доступа задаётся явно и в любой момент отзывается снятием шаринга.
+
+Файл, созданный сервисным аккаунтом, принадлежит **ему**, а не тебе, и место
+занимает в его квоте. Практичнее создавать документы самому и расшаривать, либо
+сразу класть их в расшаренную папку.
+
+## Подключение
+
+Готовую команду печатает `setup.js`. Вручную:
 
 ```bash
-claude mcp add gworkspace -e GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json -- node /path/to/google-workspace-mcp/index.js
+claude mcp add --scope user gworkspace \
+  -e GOOGLE_APPLICATION_CREDENTIALS=/path/to/sa.json \
+  -- node /path/to/google-workspace-mcp/index.js
 ```
 
-Ключ сервисного аккаунта в репо не хранится — только через env.
+Ключ передаётся только через переменную окружения — в репозитории его нет и быть
+не должно (`.gitignore` ловит `*service-account*.json`, `*credentials*.json`, `*.pem`).
+
+## Диагностика
+
+- **`GOOGLE_APPLICATION_CREDENTIALS is not set`** — переменная не доехала до
+  сервера. При регистрации через `claude mcp add` её нужно передать флагом `-e`.
+- **403 / `The caller does not have permission`** — файл не расшарен на
+  сервисный аккаунт, либо расшарен как Viewer, а нужен Editor.
+- **404 на существующий документ** — та же причина: без шаринга файл для
+  сервисного аккаунта просто не существует.
+- **`API has not been used in project ... before or it is disabled`** — не
+  включён один из трёх API (шаг 2).
+
+## Лицензия
+
+MIT — см. [LICENSE](LICENSE).
